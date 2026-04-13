@@ -14,3 +14,4 @@
 ## Concepts
 
 (Cross-cutting concept pages will be listed here)
+- [oauth2](domains/backend/auth/oauth2.md) — OAuth 2.0 -- confidence: low (2026-04-13)
