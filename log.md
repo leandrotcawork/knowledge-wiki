@@ -16,3 +16,6 @@ Compiled 3 sources into domains/integrations/nfse-mei.md (confidence: low)
 
 ## [2026-04-13 12:11] ingest | Integração de NFS-e para MEI
 Compiled 3 sources into domains/integrations/nfse-mei-integracao.md (confidence: low)
+
+## [2026-04-13 22:57] ingest | Async Context Manager em Python
+Compiled 3 sources into domains/python/async/async_context_manager.md (confidence: medium)
