@@ -25,3 +25,6 @@ Compiled 1 sources into domains/ai/agent-skills-architecture.md (confidence: low
 
 ## [2026-04-14 01:40] ingest | Claude Code Best Practices and Agentic Engineering
 Compiled 3 sources into domains/ai/claude-code-engineering.md (confidence: low)
+
+## [2026-04-14 15:20] ingest | Workflows, Plugins e Skills para Codex e Claude Code
+Compiled 4 sources into domains/ai/agentic-coding-workflows-plugins.md (confidence: low)
