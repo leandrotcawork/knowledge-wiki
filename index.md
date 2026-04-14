@@ -19,3 +19,4 @@
 - [nfse-mei-integracao](domains/integrations/nfse-mei-integracao.md) — Integração de NFS-e para MEI -- confidence: low (2026-04-13)
 - [async_context_manager](domains/python/async/async_context_manager.md) — Async Context Manager em Python -- confidence: medium (2026-04-14)
 - [agent-skills-architecture](domains/ai/agent-skills-architecture.md) — Agent Skills e Arquitetura de Agentes Generativos -- confidence: low (2026-04-14)
+- [claude-code-engineering](domains/ai/claude-code-engineering.md) — Claude Code Best Practices and Agentic Engineering -- confidence: low (2026-04-14)
