@@ -31,3 +31,6 @@ Compiled 4 sources into domains/ai/agentic-coding-workflows-plugins.md (confiden
 
 ## [2026-04-14 15:29] ingest | Workflows, Plugins e Skills para Codex e Claude Code
 Compiled 5 sources into domains/ai/agentic-coding-workflows-plugins.md (confidence: low)
+
+## [2026-04-16 14:00] proactive | Improved domains/ai/agent-skills-architecture.md
+Upgraded via proactive research
