@@ -37,3 +37,6 @@ Upgraded via proactive research
 
 ## [2026-04-19 14:00] proactive | Improved domains/ai/agentic-coding-workflows-plugins.md
 Upgraded via proactive research
+
+## [2026-04-23 14:00] proactive | Improved domains/ai/claude-code-engineering.md
+Upgraded via proactive research
