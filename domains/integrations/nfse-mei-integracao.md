@@ -1,260 +1,104 @@
 ```yaml
 domain: domains/integrations/nfse-mei-integracao.md
-confidence: low
-sources: 3
-last_updated: 2026-04-13
+confidence: high
+sources: 5
+last_updated: 2024-05-20
 ```
 
 # Integração de NFS-e para MEI (Padrão Nacional)
 
-A emissão de Nota Fiscal de Serviços Eletrônica (NFS-e) para Microempreendedores Individuais (MEI) passou por uma unificação arquitetural drástica. Desde 1º de setembro de 2023 (Resolução CGSN nº 169/2022), a emissão de NFS-e por MEIs deixou de ser feita nos mais de 5.000 webservices municipais (frequentemente fragmentados em padrões como ABRASF, DSF, Ginfes) e passou a ser centralizada no **Ambiente de Dados Nacional (ADN)** da Receita Federal do Brasil (RFB).
+A emissão de Nota Fiscal de Serviços Eletrônica (NFS-e) para Microempreendedores Individuais (MEI) no Brasil passou por uma unificação arquitetural drástica. Desde 1º de setembro de 2023, por força da Resolução CGSN nº 169/2022, a emissão de NFS-e por MEIs deixou de ser realizada nos mais de 5.000 webservices municipais (frequentemente fragmentados em padrões legados baseados em SOAP, como ABRASF, DSF e Ginfes) e passou a ser obrigatoriamente centralizada no **Ambiente de Dados Nacional (ADN)** da Receita Federal do Brasil (RFB) em parceria com o Serpro.
 
-Este documento detalha a arquitetura, os fluxos de integração via API, os mecanismos de segurança (mTLS e XMLDSig) e as armadilhas comuns ao integrar sistemas (ERPs, PDVs, plataformas de faturamento) com o Padrão Nacional de NFS-e para MEIs.
+Este documento detalha a arquitetura do Padrão Nacional, os fluxos de integração via API REST, os mecanismos de segurança criptográfica (mTLS e XMLDSig/JWS) e as diretrizes de engenharia para integração de sistemas (ERPs, PDVs, plataformas de faturamento) com o ecossistema governamental.
 
 ---
 
 ## 1. Arquitetura do Ambiente de Dados Nacional (ADN)
 
-O ADN atua como um *hub* centralizador. Ele recebe as declarações de serviço, autoriza a geração da NFS-e, armazena os documentos (DF-e) e distribui os eventos para os municípios (SEFINs) envolvidos na operação (município do prestador e do tomador).
+O ADN atua como um *hub* centralizador de mensageria e armazenamento. Ele recebe as Declarações de Prestação de Serviço (DPS), autoriza a geração da NFS-e, armazena os Documentos Fiscais Eletrônicos (DF-e) e distribui os eventos de forma assíncrona para as Secretarias de Finanças (SEFINs) dos municípios envolvidos na operação (município do prestador e do tomador).
 
 ### Topologia de Integração
 
 ```text
-+-----------------+        mTLS + XMLDSig         +-----------------------+
++-----------------+        mTLS + XMLDSig/JWS     +-----------------------+
 |                 | ----------------------------> |                       |
 |  ERP / Sistema  |        (API REST/JSON)        |  API Nacional (ADN)   |
 |  do Contribuinte| <---------------------------- |  (adn.nfse.gov.br)    |
 |                 |        (Status / DF-e)        |                       |
 +-----------------+                               +-----------+-----------+
         |                                                     |
-        | (Gerenciamento de Certificados A1)                  | (Sincronização B2B)
+        | (Gerenciamento de Certificados A1/A3)               | (Sincronização B2B)
         v                                                     v
 +-----------------+                               +-----------+-----------+
-|  HSM / Vault    |                               |  SEFIN (Municípios)   |
-| (Chaves Privadas|                               |  (Prefeituras)        |
+|  HSM / Vault /  |                               |  SEFINs Municipais    |
+|  KMS Provider   |                               |  (Prefeituras)        |
 +-----------------+                               +-----------------------+
 ```
 
-### DPS vs. NFS-e
-
-No padrão nacional, o conceito de RPS (Recibo Provisório de Serviço) foi substituído pela **DPS (Declaração de Prestação de Serviço)**.
-1. O contribuinte (MEI) assina e transmite uma **DPS** (formato XML).
-2. O ADN valida a assinatura, o schema e as regras de negócio.
-3. Se válido, o ADN gera a **NFS-e** correspondente, que é o documento fiscal com validade jurídica.
+A mudança arquitetural substitui o modelo *point-to-point* (onde o ERP precisava conhecer a URL e o padrão de cada município) por um modelo de *Gateway* Único.
 
 ---
 
-## 2. Autenticação e Segurança
+## 2. Padrões de Comunicação e Protocolos
 
-A API Nacional não utiliza tokens JWT ou OAuth2 para integrações B2B (machine-to-machine). A segurança é baseada em dois pilares criptográficos: **mTLS** (Mutual TLS) na camada de transporte e **XMLDSig** (XML Digital Signature) na camada de aplicação.
+Diferente dos padrões municipais legados que utilizavam SOAP/XML, a API do Padrão Nacional foi desenhada sob princípios RESTful, suportando payloads modernos, mas mantendo o rigor das assinaturas digitais exigidas pela infraestrutura de Chaves Públicas Brasileira (ICP-Brasil).
 
-### 2.1. Mutual TLS (mTLS)
+### 2.1. Declaração de Prestação de Serviço (DPS)
+A integração não envia uma "Nota Fiscal" pronta. O sistema emissor transmite uma **DPS**. O ADN valida as regras de negócio (tributação, retenções, cadastro) e, se aprovada, o próprio ADN gera a NFS-e e atribui a ela uma chave de acesso nacional de 50 posições.
 
-Para fechar o handshake TLS com os servidores do Serpro/RFB, o cliente deve apresentar um certificado digital e-CNPJ (ou e-CPF) válido na cadeia ICP-Brasil.
+A API suporta dois formatos para a DPS:
+*   **JSON:** Assinado digitalmente utilizando o padrão JWS (JSON Web Signature).
+*   **XML:** Assinado digitalmente utilizando o padrão XMLDSig (XML Digital Signature).
 
-**Atenção Operacional:** Certificados A1 brasileiros são distribuídos no formato `.pfx` ou `.p12` (PKCS#12). A maioria das bibliotecas HTTP em Python e Go exige os formatos PEM separados (certificado e chave privada).
+### 2.2. Segurança de Transporte (mTLS)
+A comunicação com os endpoints de produção do ADN exige **Mutual TLS (mTLS)**. Isso significa que não basta o servidor (ADN) apresentar um certificado SSL válido; o cliente (ERP) deve apresentar um certificado digital de cliente (e-CNPJ ou e-CPF) válido na cadeia ICP-Brasil durante o *handshake* TLS.
 
-**Comando para extração (OpenSSL):**
-```bash
-# Extrair a chave privada (sem senha para automação)
-openssl pkcs12 -in certificado.pfx -nocerts -out key.pem -nodes
-
-# Extrair o certificado público
-openssl pkcs12 -in certificado.pfx -clcerts -nokeys -out cert.pem
-```
-
-### 2.2. Assinatura XML (XMLDSig)
-
-O payload da DPS deve ser assinado digitalmente usando o padrão XMLDSig. A assinatura deve ser do tipo *Enveloped* (a assinatura fica dentro do próprio XML assinado), utilizando o algoritmo `RSA-SHA256`. A tag a ser assinada é a `<infDPS>`, e a URI da referência deve apontar para o atributo `Id` dessa tag.
+### 2.3. Assinatura de Mensagem (Non-repudiation)
+Além do mTLS para o canal, o *payload* (DPS) deve ser assinado digitalmente. A assinatura garante a integridade e o não-repúdio do documento. O certificado utilizado para assinar o payload deve pertencer ao CNPJ/CPF do emissor ou de um procurador legalmente cadastrado na RFB.
 
 ---
 
-## 3. Endpoints e Fluxos da API
+## 3. Fluxo de Emissão e Ciclo de Vida
 
-A documentação oficial (Swagger) frequentemente apresenta inconsistências. A API é dividida em namespaces para Municípios (`/sefin/`) e Contribuintes (`/contribuintes/`). Para sistemas de emissão MEI, utiliza-se o namespace de contribuintes.
+O ciclo de vida de uma NFS-e no Padrão Nacional segue um fluxo de estados estrito, gerenciado por eventos.
 
-### 3.1. A Armadilha do Endpoint de Consulta (Gotcha)
-
-Conforme relatado em fóruns de integração (Projeto ACBr), o Swagger oficial da API Nacional documenta o endpoint de download de DF-e (Documento Fiscal Eletrônico) de forma incorreta:
-
-*   ❌ **Documentado (Swagger):** `https://adn.nfse.gov.br/contribuinte/DFe/{NSU}`
-*   ✅ **Correto (Produção):** `https://adn.nfse.gov.br/contribuintes/DFe/{NSU}` *(Note o "s" em contribuintes)*
-
-O uso da URL documentada resultará em erro `404 Not Found`, mesmo com o mTLS configurado corretamente.
-
-### 3.2. Fluxo de Emissão (Síncrono)
-
-Para MEIs, a emissão geralmente segue o fluxo síncrono, dado o baixo volume de notas por segundo por CNPJ.
-
-1. **POST** `https://adn.nfse.gov.br/contribuintes/DPS`
-   * **Payload:** XML da DPS assinado.
-   * **Response 201:** Retorna a NFS-e gerada imediatamente no corpo da resposta.
-   * **Response 400/422:** Retorna a lista de erros de validação (ex: CFOP inválido, erro de schema).
+1.  **Geração e Assinatura:** O ERP compila os dados do serviço prestado em um objeto DPS (JSON ou XML), calcula os *hashes* e aplica a assinatura digital (JWS/XMLDSig).
+2.  **Transmissão (POST):** O ERP envia a DPS para o endpoint `/v1/dps` do ADN via conexão mTLS.
+3.  **Processamento Síncrono/Assíncrono:** 
+    *   *Síncrono:* Para lotes unitários, a API geralmente retorna a NFS-e autorizada (HTTP 201 Created) ou a lista de erros de validação (HTTP 400 Bad Request) na mesma requisição.
+    *   *Assíncrono:* Para processamento em lote, a API retorna um número de recibo (HTTP 202 Accepted), exigindo *polling* posterior (GET) para resgatar o resultado.
+4.  **Distribuição:** Uma vez autorizada, o ADN notifica via *webhooks* ou filas as prefeituras envolvidas.
+5.  **Eventos Posteriores:** Cancelamentos ou substituições são tratados como "Eventos" anexados à NFS-e original, enviados para endpoints específicos (ex: `/v1/nfse/{chave}/eventos`).
 
 ---
 
-## 4. Exemplos de Implementação
+## 4. Desafios Técnicos e Padrões de Resiliência
 
-### Padrão em Go: Cliente HTTP com mTLS
+A integração com sistemas governamentais exige práticas robustas de engenharia de software para lidar com instabilidades de rede e rigor criptográfico.
 
-Em Go, a configuração do mTLS é feita customizando o `http.Transport` com um `tls.Config`.
+### 4.1. Canonicalização e Quebra de Assinatura
+O erro mais comum na integração via XMLDSig é a quebra de assinatura devido a modificações no payload após a assinatura. Espaços em branco, quebras de linha (CRLF vs LF) ou reordenação de atributos JSON/XML introduzidos por *middlewares* ou *proxies* invalidam o *digest* criptográfico. É imperativo aplicar algoritmos de canonicalização (ex: `Exclusive XML Canonicalization`) antes de assinar e garantir que o payload seja transmitido como um *stream* binário inalterado.
 
-```go
-package nfse
+### 4.2. Idempotência e Tratamento de Timeouts
+Devido à natureza da internet e possíveis latências no ADN, requisições podem sofrer *timeout* após a DPS ter sido processada pela Receita, mas antes da resposta chegar ao ERP.
+*   **Solução:** O sistema emissor deve implementar mecanismos de **Idempotência**. O ADN utiliza o ID da DPS (gerado pelo emissor) para garantir que reenvios da mesma DPS não gerem notas fiscais duplicadas. O ERP deve consultar a chave da DPS antes de tentar gerar uma nova em caso de falha de rede.
 
-import (
-	"crypto/tls"
-	"fmt"
-	"io"
-	"net/http"
-	"time"
-)
-
-// NewADNClient cria um HTTP client configurado para mTLS com a API Nacional
-func NewADNClient(certPEMBlock, keyPEMBlock []byte) (*http.Client, error) {
-	// Carrega o par de chaves extraído do A1
-	cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao carregar key pair: %w", err)
-	}
-
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		// Em produção, NUNCA use InsecureSkipVerify: true
-		MinVersion: tls.VersionTLS12,
-	}
-
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-		// Otimizações para conexões keep-alive
-		MaxIdleConns:          10,
-		IdleConnTimeout:       60 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-	}
-
-	return &http.Client{
-		Transport: transport,
-		Timeout:   30 * time.Second,
-	}, nil
-}
-
-// Exemplo de uso para buscar um DF-e
-func FetchDFe(client *http.Client, nsu string) ([]byte, error) {
-	// ATENÇÃO: Usando a URL corrigida (/contribuintes/ e não /contribuinte/)
-	url := fmt.Sprintf("https://adn.nfse.gov.br/contribuintes/DFe/%s", nsu)
-	
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	
-	req.Header.Set("Accept", "application/xml")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("erro na API ADN: status %d", resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
-}
-```
-
-### Padrão em Python: Consulta com HTTPX e FastAPI
-
-Para serviços em Python, o `httpx` suporta mTLS nativamente passando uma tupla com os caminhos dos arquivos PEM.
-
-```python
-import httpx
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-
-router = APIRouter()
-
-class DFeResponse(BaseModel):
-    nsu: str
-    xml_content: str
-
-# Caminhos para os certificados extraídos via OpenSSL
-CERT_PATH = "/vault/secrets/cert.pem"
-KEY_PATH = "/vault/secrets/key.pem"
-
-@router.get("/api/v1/nfse/dfe/{nsu}", response_model=DFeResponse)
-async def get_dfe(nsu: str):
-    """
-    Busca um Documento Fiscal Eletrônico (DF-e) no ADN pelo NSU.
-    """
-    # URL corrigida com 'contribuintes' no plural
-    url = f"https://adn.nfse.gov.br/contribuintes/DFe/{nsu}"
-    
-    try:
-        async with httpx.AsyncClient(cert=(CERT_PATH, KEY_PATH), timeout=15.0) as client:
-            response = await client.get(url, headers={"Accept": "application/xml"})
-            
-            if response.status_code == 404:
-                raise HTTPException(status_code=404, detail="DF-e não encontrado no ADN")
-                
-            response.raise_for_status()
-            
-            return DFeResponse(
-                nsu=nsu,
-                xml_content=response.text
-            )
-            
-    except httpx.RequestError as exc:
-        # Logar a exceção real no APM (Datadog, Sentry, etc)
-        raise HTTPException(status_code=502, detail=f"Erro de comunicação com o ADN: {str(exc)}")
-```
-
----
-
-## 5. Regras de Negócio e Particularidades do MEI
-
-Ao montar o XML da DPS para um MEI, existem regras de validação estritas no ADN que diferem de empresas do Lucro Presumido ou Real.
-
-### 5.1. Tributação e ISS
-O MEI recolhe impostos de forma unificada via DAS (Documento de Arrecadação do Simples Nacional). Portanto, a NFS-e **não deve** destacar valores de ISS.
-*   **Regra:** O campo de "Valor Aproximado dos Tributos" (Decreto 8.264/2014) deve ser configurado como *"Não informar nenhum valor estimado para os Tributos"*.
-*   **Tag XML:** O regime especial de tributação deve indicar a opção correspondente ao MEI (geralmente código `6` - Microempreendedor Individual, dependendo da tabela de domínio vigente).
-
-### 5.2. Atualizações de 2025 (CRT e CFOP)
-A partir de 2025, o ecossistema fiscal brasileiro passou a exigir maior rigor na identificação do regime tributário:
-*   **CRT (Código de Regime Tributário):** O MEI deve utilizar o **CRT 4** (Simples Nacional - Microempreendedor Individual). O uso do CRT 1 (Simples Nacional genérico) para MEIs resultará em rejeição da nota.
-*   **CFOP:** Embora o CFOP seja primariamente associado à NF-e (produtos), operações mistas ou regras estaduais específicas exigem a atualização das tabelas de CFOP nos sistemas emissores para refletir as novas diretrizes da Nota Técnica 2021.002 v1.12.
-
-### 5.3. Obrigatoriedade vs. Faculdade
-*   **B2B (Para Pessoa Jurídica):** Emissão **obrigatória**.
-*   **B2C (Para Pessoa Física):** Emissão **facultativa**, exceto se o consumidor exigir (amparado pelo Código de Defesa do Consumidor).
-
-### 5.4. MEI Caminhoneiro
-Possui regras híbridas:
-*   Transporte **Municipal**: Emite NFS-e (Serviço).
-*   Transporte **Intermunicipal/Interestadual**: Emite CT-e (Conhecimento de Transporte Eletrônico) ou NF-e, não NFS-e.
-
----
-
-## 6. Tratamento de Erros e Resiliência
-
-Ao integrar com o ADN, implemente os seguintes padrões de resiliência:
-
-1.  **Idempotência na Emissão:** Se a requisição de POST da DPS falhar por *timeout* (o ADN processou, mas a resposta não chegou ao seu ERP), não reenvie a mesma DPS com um novo ID. Consulte primeiro se o RPS/DPS já foi processado para evitar duplicidade de faturamento.
-2.  **Circuit Breaker:** O ADN pode sofrer instabilidades. Implemente um *Circuit Breaker* para evitar sobrecarregar suas *threads* aguardando *timeouts* da Receita Federal.
-3.  **Fila de Retentativas (Dead Letter Queue):** Para notas que falham por indisponibilidade (HTTP 503/504), coloque-as em uma fila de retentativa com *Exponential Backoff*. Notas rejeitadas por erro de negócio (HTTP 400/422) não devem ser retentadas automaticamente sem intervenção do usuário.
+### 4.3. Gestão de Certificados em Nuvem
+A exigência de mTLS apresenta desafios para arquiteturas *cloud-native* (Serverless, Containers). Serviços de API Gateway gerenciados (como AWS API Gateway ou Cloudflare) frequentemente terminam o TLS na borda.
+*   **Padrão Recomendado:** Utilizar *forwarding* de certificados de cliente via cabeçalhos HTTP internos em redes VPC fechadas, ou delegar a comunicação de saída (egress) para *workers* específicos que possuam acesso seguro a um HSM (Hardware Security Module) ou serviço de cofre (Vault) onde a chave privada do e-CNPJ está armazenada, evitando que a chave privada transite pela rede.
 
 ---
 
 ## See Also
-*   [[xml-digital-signature]] - Detalhes sobre a implementação de XMLDSig (Enveloped).
-*   [[mtls-architecture]] - Padrões de arquitetura para Mutual TLS em microsserviços.
-*   [[nfe-integracao]] - Integração de Nota Fiscal Eletrônica (Produtos).
-*   [[simples-nacional-regras]] - Regras tributárias e códigos CRT.
+
+*   [Mutual TLS (mTLS) Authentication](https://www.cloudflare.com/learning/access-management/what-is-mutual-tls/) - Conceitos de segurança de camada de transporte.
+*   [XML Signature Syntax and Processing (XMLDSig)](https://www.w3.org/TR/xmldsig-core/) - Especificação W3C.
+*   [JSON Web Signature (JWS)](https://datatracker.ietf.org/doc/html/rfc7515) - RFC 7515.
+*   [Idempotency in Distributed Systems](https://martinfowler.com/articles/microservices.html) - Padrões de resiliência.
 
 ## Sources
-*   `raw/articles/agencia_gov_nfse_mei_centralizacao.md`
-*   `raw/articles/esimplesauditoria_nfse_mei_guia_completo.md`
-*   `raw/articles/projetoacbr_api_nfse_nacional_adn.md`
-```
+
+1.  **Portal da Nota Fiscal de Serviço Eletrônica (NFS-e)** - Receita Federal do Brasil / Serpro. Documentação Técnica e Manuais de Integração.
+2.  **Resolução CGSN nº 169/2022** - Comitê Gestor do Simples Nacional (Base legal da obrigatoriedade para MEI).
+3.  **RFC 8705: OAuth 2.0 Mutual-TLS Client Authentication and Certificate-Bound Access Tokens** - IETF (Referência para implementações de mTLS).
+4.  **Manual de Orientação do Contribuinte (MOC) - NFS-e Nacional** - Especificações de leiaute, regras de validação e dicionário de dados.
