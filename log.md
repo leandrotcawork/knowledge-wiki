@@ -43,3 +43,6 @@ Upgraded via proactive research
 
 ## [2026-04-26 14:00] proactive | Improved domains/integrations/nfse-mei-integracao.md
 Upgraded via proactive research
+
+## [2026-04-30 14:00] proactive | Improved domains/backend/auth/oauth2.md
+Upgraded via proactive research
